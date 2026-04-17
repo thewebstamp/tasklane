@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { requireAuth, requireRole } from "@/lib/auth";
+import { requireAuth } from "@/lib/auth";
 import { parseBody, UpdateUserSchema } from "@/lib/validators";
 import {
   ok,
@@ -11,33 +11,51 @@ import {
 import { queryOne, execute } from "@/lib/db";
 import type { SafeUser } from "@/types";
 
-type Context = { params: { id: string } };
+type Context = { params: Promise<{ id: string }> };
 
-export const GET = withErrorHandler(async (_req: NextRequest, ctx?: unknown) => {
-  const { params } = ctx as Context;
-  const session = await requireAuth();
+// ─────────────────────────────────────────────
+// GET
+// ─────────────────────────────────────────────
 
-  // Users can fetch their own profile; admins can fetch anyone
-  if (session.sub !== params.id && session.role !== "admin") {
-    return forbidden();
-  }
+export const GET = withErrorHandler(
+  async (_req: NextRequest, ctx?: unknown) => {
+    if (!ctx) return notFound("Invalid context");
 
-  const user = await queryOne<SafeUser>(
-    `SELECT id, name, email, role, avatar_url, is_active, created_at, updated_at
+    const { id } = await (ctx as Context).params;
+
+    const session = await requireAuth();
+
+    // Users can fetch their own profile; admins can fetch anyone
+    if (session.sub !== id && session.role !== "admin") {
+      return forbidden();
+    }
+
+    const user = await queryOne<SafeUser>(
+      `SELECT id, name, email, role, avatar_url, is_active, created_at, updated_at
      FROM users WHERE id = $1 LIMIT 1`,
-    [params.id],
-  );
-  if (!user) return notFound("User not found");
-  return ok(user);
-});
+      [id],
+    );
+
+    if (!user) return notFound("User not found");
+
+    return ok(user);
+  },
+);
+
+// ─────────────────────────────────────────────
+// PATCH
+// ─────────────────────────────────────────────
 
 export const PATCH = withErrorHandler(
   async (req: NextRequest, ctx?: unknown) => {
-    const { params } = ctx as Context;
+    if (!ctx) return notFound("Invalid context");
+
+    const { id } = await (ctx as Context).params;
+
     const session = await requireAuth();
 
     // Users can only update their own name; admins can update role/is_active
-    if (session.sub !== params.id && session.role !== "admin") {
+    if (session.sub !== id && session.role !== "admin") {
       return forbidden();
     }
 
@@ -60,10 +78,12 @@ export const PATCH = withErrorHandler(
       args.push(data.name);
       sets.push(`name = $${args.length}`);
     }
+
     if (data.role !== undefined) {
       args.push(data.role);
       sets.push(`role = $${args.length}`);
     }
+
     if (data.is_active !== undefined) {
       args.push(data.is_active);
       sets.push(`is_active = $${args.length}`);
@@ -71,17 +91,19 @@ export const PATCH = withErrorHandler(
 
     if (sets.length === 0) return badRequest("No fields to update");
 
-    args.push(params.id);
+    args.push(id);
+
     const rows = await execute<SafeUser>(
       `
-    UPDATE users SET ${sets.join(", ")}
-    WHERE id = $${args.length}
-    RETURNING id, name, email, role, avatar_url, is_active, created_at, updated_at
-  `,
+      UPDATE users SET ${sets.join(", ")}
+      WHERE id = $${args.length}
+      RETURNING id, name, email, role, avatar_url, is_active, created_at, updated_at
+    `,
       args,
     );
 
     if (!rows[0]) return notFound("User not found");
+
     return ok(rows[0], "Profile updated");
   },
 );

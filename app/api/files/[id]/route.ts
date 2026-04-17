@@ -5,15 +5,21 @@ import { deleteFile, getSignedUrl } from "@/lib/cloudinary";
 import { ok, notFound, forbidden, withErrorHandler } from "@/lib/response";
 import { trackEvent } from "@/services/analytics.service";
 
-type Context = { params: { id: string } };
+type Context = { params: Promise<{ id: string }> };
+
+// ─────────────────────────────────────────────
+// GET
+// ─────────────────────────────────────────────
 
 export const GET = withErrorHandler(
   async (_req: NextRequest, ctx?: unknown) => {
+    if (!ctx) return notFound("Invalid context");
+
+    const { id } = await (ctx as Context).params;
+
     const session = await requireAuth();
 
-    const { params } = ctx as Context;
-
-    const file = await getFile(params.id, session.sub, session.role);
+    const file = await getFile(id, session.sub, session.role);
     if (!file) return notFound("File not found");
 
     const url = file.is_public
@@ -24,13 +30,19 @@ export const GET = withErrorHandler(
   },
 );
 
+// ─────────────────────────────────────────────
+// DELETE
+// ─────────────────────────────────────────────
+
 export const DELETE = withErrorHandler(
   async (_req: NextRequest, ctx?: unknown) => {
+    if (!ctx) return notFound("Invalid context");
+
+    const { id } = await (ctx as Context).params;
+
     const session = await requireAuth();
 
-    const { params } = ctx as Context;
-
-    const file = await getFile(params.id, session.sub, session.role);
+    const file = await getFile(id, session.sub, session.role);
     if (!file) return notFound("File not found");
 
     if (file.uploaded_by !== session.sub && session.role !== "admin") {
@@ -43,11 +55,9 @@ export const DELETE = withErrorHandler(
       console.error("[Cloudinary Delete Error]", err);
     }
 
-    await deleteFileRecord(params.id);
+    await deleteFileRecord(id);
 
-    trackEvent(session.sub, "file_deleted", "file", params.id).catch(
-      console.error,
-    );
+    trackEvent(session.sub, "file_deleted", "file", id).catch(console.error);
 
     return ok(null, "File deleted successfully");
   },

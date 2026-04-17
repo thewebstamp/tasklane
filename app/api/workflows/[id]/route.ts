@@ -5,99 +5,123 @@ import { ok, badRequest, notFound, withErrorHandler } from "@/lib/response";
 import { queryOne, execute } from "@/lib/db";
 import type { DBWorkflowRule } from "@/types";
 
-type Context = { params: { id: string } };
+type Context = { params: Promise<{ id: string }> };
 
-export const GET = withErrorHandler(async (_req: NextRequest, ctx?: unknown) => {
-  const { params } = ctx as Context;
+// ─────────────────────────────────────────────
+// GET
+// ─────────────────────────────────────────────
 
-  await requireRole(["admin"]);
+export const GET = withErrorHandler(
+  async (_req: NextRequest, ctx?: unknown) => {
+    if (!ctx) return notFound("Invalid context");
 
-  const rule = await queryOne<DBWorkflowRule>(
-    "SELECT * FROM workflow_rules WHERE id = $1 LIMIT 1",
-    [params.id],
-  );
+    const { id } = await (ctx as Context).params;
 
-  if (!rule) return notFound("Workflow rule not found");
+    await requireRole(["admin"]);
 
-  return ok(rule);
-});
+    const rule = await queryOne<DBWorkflowRule>(
+      "SELECT * FROM workflow_rules WHERE id = $1 LIMIT 1",
+      [id],
+    );
 
-export const PATCH = withErrorHandler(async (req: NextRequest, ctx?: unknown) => {
-  const { params } = ctx as Context;
+    if (!rule) return notFound("Workflow rule not found");
 
-  await requireRole(["admin"]);
+    return ok(rule);
+  },
+);
 
-  const body = await req.json().catch(() => null);
-  if (!body) return badRequest("Invalid JSON body");
+// ─────────────────────────────────────────────
+// PATCH
+// ─────────────────────────────────────────────
 
-  const { data, error } = parseBody(UpdateWorkflowSchema, body);
-  if (error || !data) return badRequest(error ?? "Invalid data");
+export const PATCH = withErrorHandler(
+  async (req: NextRequest, ctx?: unknown) => {
+    if (!ctx) return notFound("Invalid context");
 
-  const sets: string[] = [];
-  const args: unknown[] = [];
+    const { id } = await (ctx as Context).params;
 
-  if (data.name !== undefined) {
-    args.push(data.name);
-    sets.push(`name = $${args.length}`);
-  }
+    await requireRole(["admin"]);
 
-  if (data.description !== undefined) {
-    args.push(data.description ?? null);
-    sets.push(`description = $${args.length}`);
-  }
+    const body = await req.json().catch(() => null);
+    if (!body) return badRequest("Invalid JSON body");
 
-  if (data.trigger_event !== undefined) {
-    args.push(data.trigger_event);
-    sets.push(`trigger_event = $${args.length}`);
-  }
+    const { data, error } = parseBody(UpdateWorkflowSchema, body);
+    if (error || !data) return badRequest(error ?? "Invalid data");
 
-  if (data.conditions !== undefined) {
-    args.push(JSON.stringify(data.conditions));
-    sets.push(`conditions = $${args.length}`);
-  }
+    const sets: string[] = [];
+    const args: unknown[] = [];
 
-  if (data.actions !== undefined) {
-    args.push(JSON.stringify(data.actions));
-    sets.push(`actions = $${args.length}`);
-  }
+    if (data.name !== undefined) {
+      args.push(data.name);
+      sets.push(`name = $${args.length}`);
+    }
 
-  if (data.is_active !== undefined) {
-    args.push(data.is_active);
-    sets.push(`is_active = $${args.length}`);
-  }
+    if (data.description !== undefined) {
+      args.push(data.description ?? null);
+      sets.push(`description = $${args.length}`);
+    }
 
-  if (sets.length === 0) {
-    return badRequest("No fields to update");
-  }
+    if (data.trigger_event !== undefined) {
+      args.push(data.trigger_event);
+      sets.push(`trigger_event = $${args.length}`);
+    }
 
-  args.push(params.id);
+    if (data.conditions !== undefined) {
+      args.push(JSON.stringify(data.conditions));
+      sets.push(`conditions = $${args.length}`);
+    }
 
-  const rows = await execute<DBWorkflowRule>(
-    `
+    if (data.actions !== undefined) {
+      args.push(JSON.stringify(data.actions));
+      sets.push(`actions = $${args.length}`);
+    }
+
+    if (data.is_active !== undefined) {
+      args.push(data.is_active);
+      sets.push(`is_active = $${args.length}`);
+    }
+
+    if (sets.length === 0) {
+      return badRequest("No fields to update");
+    }
+
+    args.push(id);
+
+    const rows = await execute<DBWorkflowRule>(
+      `
     UPDATE workflow_rules
     SET ${sets.join(", ")}
     WHERE id = $${args.length}
     RETURNING *
   `,
-    args,
-  );
+      args,
+    );
 
-  if (!rows[0]) return notFound("Workflow rule not found");
+    if (!rows[0]) return notFound("Workflow rule not found");
 
-  return ok(rows[0], "Workflow rule updated");
-});
+    return ok(rows[0], "Workflow rule updated");
+  },
+);
 
-export const DELETE = withErrorHandler(async (_req: NextRequest, ctx?: unknown) => {
-  const { params } = ctx as Context;
+// ─────────────────────────────────────────────
+// DELETE
+// ─────────────────────────────────────────────
 
-  await requireRole(["admin"]);
+export const DELETE = withErrorHandler(
+  async (_req: NextRequest, ctx?: unknown) => {
+    if (!ctx) return notFound("Invalid context");
 
-  const rows = await execute<{ id: string }>(
-    "DELETE FROM workflow_rules WHERE id = $1 RETURNING id",
-    [params.id],
-  );
+    const { id } = await (ctx as Context).params;
 
-  if (!rows[0]) return notFound("Workflow rule not found");
+    await requireRole(["admin"]);
 
-  return ok(null, "Workflow rule deleted");
-});
+    const rows = await execute<{ id: string }>(
+      "DELETE FROM workflow_rules WHERE id = $1 RETURNING id",
+      [id],
+    );
+
+    if (!rows[0]) return notFound("Workflow rule not found");
+
+    return ok(null, "Workflow rule deleted");
+  },
+);

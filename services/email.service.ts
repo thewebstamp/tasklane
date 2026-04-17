@@ -251,10 +251,10 @@ export async function sendEmail(
 export async function sendToRequestParticipants(opts: {
   requestId: string;
   templateId: string;
-  to: "submitter" | "assignee" | string; // email or role keyword
+  to: "submitter" | "assignee" | string;
   variables: Record<string, string>;
   sentBy?: string;
-}): Promise<void> {
+}): Promise<{ success: boolean; logId: string | null; error?: string }> {
   const { requestId, templateId, to, variables, sentBy } = opts;
 
   let email = to;
@@ -275,7 +275,13 @@ export async function sendToRequestParticipants(opts: {
     );
 
     const row = rows[0];
-    if (!row) return;
+    if (!row) {
+      return {
+        success: false,
+        logId: null,
+        error: "Request not found when resolving email recipient",
+      };
+    }
 
     email =
       to === "submitter"
@@ -283,7 +289,8 @@ export async function sendToRequestParticipants(opts: {
         : (row.assignee_email ?? row.submitter_email);
   }
 
-  await sendEmail({
+  // ✅ RETURN the result from sendEmail
+  return sendEmail({
     to: email,
     template_id: templateId,
     request_id: requestId,

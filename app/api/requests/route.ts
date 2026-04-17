@@ -1,63 +1,96 @@
-import { NextRequest } from "next/server";
-import { requireAuth } from "@/lib/auth";
-import {
-  parseBody,
-  CreateRequestSchema,
-  PaginationSchema,
-} from "@/lib/validators";
-import { ok, created, badRequest, withErrorHandler } from "@/lib/response";
-import { listRequests, createRequest } from "@/services/requests.service";
-import { evaluateWorkflowRules } from "@/services/workflows.service";
-import { trackEvent } from "@/services/analytics.service";
+import { NextRequest } from 'next/server'
+import { requireAuth, requireRole } from '@/lib/auth'
+import { parseBody, UpdateRequestSchema } from '@/lib/validators'
+import { ok, badRequest, notFound, withErrorHandler } from '@/lib/response'
+import { getRequest, updateRequest, deleteRequest } from '@/services/requests.service'
+import { evaluateWorkflowRules } from '@/services/workflows.service'
+import { trackEvent } from '@/services/analytics.service'
+
+type Context = { params: { id: string } }
 
 // ─────────────────────────────────────────────
-// GET requests (list)
+// GET
 // ─────────────────────────────────────────────
 
-export const GET = withErrorHandler(async (req: NextRequest) => {
-  const session = await requireAuth();
+export const GET = withErrorHandler(async (_req: NextRequest, ctx?: unknown) => {
+  const { params } = (await ctx) as Context
 
-  const url = new URL(req.url);
-  const params = Object.fromEntries(url.searchParams.entries());
+  const session = await requireAuth()
 
-  const { data, error } = parseBody(PaginationSchema, params);
-  if (error || !data) return badRequest(error ?? "Invalid query params");
+  const request = await getRequest(params.id, session.sub, session.role)
+  if (!request) return notFound('Request not found')
 
-  const result = await listRequests(data, session.sub, session.role);
-
-  return ok(result);
-});
+  return ok(request)
+})
 
 // ─────────────────────────────────────────────
-// POST request (create)
+// PATCH
 // ─────────────────────────────────────────────
 
-export const POST = withErrorHandler(async (req: NextRequest) => {
-  const session = await requireAuth();
+export const PATCH = withErrorHandler(async (req: NextRequest, ctx?: unknown) => {
+  const { params } = (await ctx) as Context
 
-  const body = await req.json().catch(() => null);
-  if (!body) return badRequest("Invalid JSON body");
+  const session = await requireAuth()
 
-  const { data, error } = parseBody(CreateRequestSchema, body);
-  if (error || !data) return badRequest(error ?? "Invalid data");
+  const body = await req.json().catch(() => null)
+  if (!body) return badRequest('Invalid JSON body')
 
-  // Normalize nullable fields
+  const { data, error } = parseBody(UpdateRequestSchema, body)
+
+  // FIX 1: handle null properly
+  if (error || !data) return badRequest(error ?? 'Invalid data')
+
+  // FIX 2: normalize null → undefined (critical for DB types)
   const normalizedData = {
     ...data,
     due_date: data.due_date ?? undefined,
     assigned_to: data.assigned_to ?? undefined,
-  };
+  }
 
-  // Create the request
-  const request = await createRequest(normalizedData, session.sub);
+  const updated = await updateRequest(
+    params.id,
+    normalizedData,
+    session.sub,
+    session.role,
+  )
 
-  // Fire workflow rules asynchronously (non-blocking)
-  evaluateWorkflowRules("on_create", request, session.sub).catch(console.error);
+  if (!updated) return notFound('Request not found or access denied')
 
-  // Track analytics event
-  trackEvent(session.sub, "request_created", "request", request.id).catch(
-    console.error,
-  );
+  // Workflow handling
+  try {
+    if (data.status) {
+      await evaluateWorkflowRules(
+        'on_status_change',
+        updated,
+        session.sub,
+        { newStatus: data.status },
+      )
+    }
 
-  return created(request, "Request submitted successfully");
-});
+    if (data.assigned_to !== undefined) {
+      await evaluateWorkflowRules('on_assign', updated, session.sub)
+    }
+  } catch (err) {
+    console.error('[Workflow] PATCH evaluation failed:', err)
+  }
+
+  trackEvent(session.sub, 'request_updated', 'request', updated.id)
+    .catch(console.error)
+
+  return ok(updated, 'Request updated successfully')
+})
+
+// ─────────────────────────────────────────────
+// DELETE
+// ─────────────────────────────────────────────
+
+export const DELETE = withErrorHandler(async (_req: NextRequest, ctx?: unknown) => {
+  const { params } = (await ctx) as Context
+
+  await requireRole(['admin'])
+
+  const deleted = await deleteRequest(params.id)
+  if (!deleted) return notFound('Request not found')
+
+  return ok(null, 'Request deleted')
+})
